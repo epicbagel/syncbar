@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.epicbagel.syncbar",
+  "name": "Syncbar",
+  "version": "0.1.0",
+  "author": "Jon",
+  "license": "MIT",
+  "description": "Watch Syncthing from the Omarchy bar: folder sync state, how far behind you are, and whether any peer is actually connected.",
+  "homepage": "https://github.com/epicbagel/syncbar",
+  "kinds": ["service", "bar-widget"],
+  "entryPoints": { "service": "Service.qml", "barWidget": "Panel.qml" },
+  "barWidget": {
+    "displayName": "Syncbar",
+    "description": "Syncthing folder state, sync progress and peer connectivity.",
+    "category": "System",
+    "aliases": ["syncthing", "sync"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": { "showLabel": true, "pollSeconds": 5, "warnDisconnected": true },
+    "schema": [
+      { "key": "showLabel", "type": "boolean", "label": "Show state on the bar",
+        "defaultValue": true,
+        "description": "Off leaves just the icon, coloured by state." },
+      { "key": "warnDisconnected", "type": "boolean", "label": "Warn when no peer is connected",
+        "defaultValue": true,
+        "description": "Folders can be perfectly in sync locally with nothing to sync to. On by default because that state looks healthy and is not." },
+      { "key": "pollSeconds", "type": "integer", "label": "Refresh every (seconds)",
+        "min": 2, "max": 120, "step": 1, "defaultValue": 5,
+        "description": "Syncthing's API is local and answers in milliseconds, so this can be brisk." }
+    ]
+  }
+}

@@ -1,0 +1,169 @@
+#!/bin/bash
+
+# omarchy:summary=Watch Syncthing folders and peers from the Omarchy bar
+# omarchy:group=syncbar
+# omarchy:args=<status|rescan|open|logs|doctor>
+# omarchy:examples=syncbar status|syncbar rescan|syncbar open
+
+set -uo pipefail
+
+# Syncthing's REST API is local HTTP and answers in milliseconds, so unlike a
+# remote backup repository everything here can simply be polled. The only
+# awkward part is the API key, which lives in Syncthing's own config.
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/syncbar"
+CONFIG_FILE="$CONFIG_DIR/config"
+
+UNIT=syncthing
+ADDRESS=""              # empty: read gui address from Syncthing's config
+TIMEOUT=4
+
+# shellcheck source=/dev/null
+[[ -f $CONFIG_FILE ]] && source "$CONFIG_FILE"
+mkdir -p "$CONFIG_DIR"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+die() { echo "syncbar: $*" >&2; exit 1; }
+have curl || die "curl is not installed"
+have jq || die "jq is not installed"
+
+# Syncthing moved its state directory over the years, so try the current
+# location first and fall back rather than reporting "no key" on an older setup.
+config_xml() {
+  local c
+  for c in "$HOME/.local/state/syncthing/config.xml" \
+           "$HOME/.config/syncthing/config.xml" \
+           "${XDG_STATE_HOME:-$HOME/.local/state}/syncthing/config.xml"; do
+    [[ -r $c ]] && { echo "$c"; return 0; }
+  done
+  return 1
+}
+
+# Never echoed anywhere: it is a credential, and the whole point of the 0600 on
+# Syncthing's config is that it does not leak into logs or process listings.
+api_key() {
+  local x
+  x=$(config_xml) || return 1
+  sed -n 's/.*<apikey>\(.*\)<\/apikey>.*/\1/p' "$x" | tr -d ' \t\r' | head -1
+}
+
+gui_address() {
+  [[ -n $ADDRESS ]] && { echo "$ADDRESS"; return 0; }
+  local x addr tls
+  x=$(config_xml) || { echo "https://127.0.0.1:8384"; return 0; }
+  # Scoped to the <gui> element on purpose: device entries carry their own
+  # <address> tags, and the first one in the file is usually "dynamic", which
+  # silently produces an unreachable URL.
+  addr=$(sed -n '/<gui/,/<\/gui>/p' "$x" | sed -n 's|.*<address>\([^<]*\)</address>.*|\1|p' | head -1)
+  [[ -z $addr ]] && addr="127.0.0.1:8384"
+  # A GUI listening on 0.0.0.0 is still reachable on loopback, and loopback is
+  # the only address we should be talking to.
+  addr=${addr/0.0.0.0/127.0.0.1}
+  tls=$(sed -n 's|.*<gui[^>]*tls="\([^"]*\)".*|\1|p' "$x" | head -1)
+  [[ $addr =~ ^[0-9a-zA-Z.:_-]+:[0-9]+$ ]] || addr="127.0.0.1:8384"
+  [[ $tls == true ]] && echo "https://$addr" || echo "http://$addr"
+}
+
+API=$(gui_address)
+KEY=$(api_key || echo "")
+
+# -k because Syncthing's GUI certificate is self-signed by design. This only
+# ever talks to loopback, so there is no transport to protect from anyone.
+api() {
+  [[ -n $KEY ]] || return 1
+  curl -sk -m "$TIMEOUT" -H "X-API-Key: $KEY" "$API$1" 2>/dev/null
+}
+
+unit_active() { systemctl --user is-active "$UNIT.service" >/dev/null 2>&1; }
+
+cmd_status() {
+  local running=false reachable=false version="" key=true
+  unit_active && running=true
+  [[ -z $KEY ]] && key=false
+
+  local ver folders conns
+  ver=$(api /rest/system/version) && [[ -n $ver ]] && reachable=true
+  version=$(jq -r '.version // ""' <<<"${ver:-{\}}" 2>/dev/null)
+
+  if [[ $reachable != true ]]; then
+    jq -cn --argjson running "$running" --argjson key "$key" \
+      '{state:(if $key|not then "nokey" else "offline" end),
+        running:$running, reachable:false, apiKey:$key,
+        version:"", folders:[], devices:{total:0,connected:0},
+        needBytes:0, globalBytes:0, percent:100, errors:0}'
+    return 0
+  fi
+
+  folders=$(api /rest/config/folders)
+  conns=$(api /rest/system/connections)
+
+  local rows="[]" need=0 global=0 errs=0
+  local id label st
+  while IFS=$'\t' read -r id label; do
+    [[ -z $id ]] && continue
+    st=$(api "/rest/db/status?folder=$id")
+    [[ -z $st ]] && continue
+    rows=$(jq -cn --argjson rows "$rows" --arg id "$id" --arg label "$label" --argjson s "$st" \
+      '$rows + [{id:$id, label:(if $label == "" then $id else $label end),
+                 state:($s.state // "unknown"),
+                 needBytes:($s.needBytes // 0), globalBytes:($s.globalBytes // 0),
+                 needFiles:($s.needFiles // 0), errors:($s.errors // 0)}]')
+  done < <(jq -r '.[] | "\(.id)\t\(.label // "")"' <<<"${folders:-[]}" 2>/dev/null)
+
+  need=$(jq '[.[].needBytes] | add // 0' <<<"$rows")
+  global=$(jq '[.[].globalBytes] | add // 0' <<<"$rows")
+  errs=$(jq '[.[].errors] | add // 0' <<<"$rows")
+
+  local total connected
+  total=$(jq '(.connections // {}) | length' <<<"${conns:-{\}}")
+  connected=$(jq '[(.connections // {}) | to_entries[] | select(.value.connected)] | length' <<<"${conns:-{\}}")
+
+  # Overall state, most alarming first. "disconnected" matters: everything can
+  # be locally in sync while there is no peer to sync with, which looks healthy
+  # and is not.
+  local state
+  if (( errs > 0 )); then state=error
+  elif (( need > 0 )); then state=syncing
+  elif jq -e 'any(.[]; .state == "syncing" or .state == "scanning")' <<<"$rows" >/dev/null; then state=syncing
+  elif (( total > 0 && connected == 0 )); then state=disconnected
+  else state=ok; fi
+
+  jq -cn --arg state "$state" --arg version "$version" --argjson rows "$rows" \
+    --argjson running "$running" --argjson need "$need" --argjson global "$global" \
+    --argjson errs "$errs" --argjson total "$total" --argjson connected "$connected" \
+    '{state:$state, running:$running, reachable:true, apiKey:true, version:$version,
+      folders:$rows, devices:{total:$total, connected:$connected},
+      needBytes:$need, globalBytes:$global, errors:$errs,
+      percent:(if $global > 0 then (100 - ($need * 100 / $global)) | floor else 100 end)}'
+}
+
+cmd_rescan() {
+  api -X >/dev/null 2>&1 || true
+  [[ -n $KEY ]] || die "no API key found in Syncthing's config"
+  curl -sk -m "$TIMEOUT" -X POST -H "X-API-Key: $KEY" "$API/rest/db/scan" >/dev/null 2>&1 &&
+    echo rescanning || die "rescan request failed"
+}
+
+cmd_open() { have xdg-open && setsid -f xdg-open "$API" >/dev/null 2>&1 && echo "$API"; }
+
+cmd_logs() { journalctl --user -u "$UNIT.service" -n "${1:-40}" --no-pager -o short-iso 2>/dev/null; }
+
+cmd_doctor() {
+  echo "syncbar diagnostics"
+  printf '  unit         %s\n' "$(systemctl --user is-active $UNIT.service 2>&1)"
+  printf '  config       %s\n' "$(config_xml || echo 'not found')"
+  printf '  api key      %s\n' "$([[ -n $KEY ]] && echo 'found (not shown)' || echo MISSING)"
+  printf '  address      %s\n' "$API"
+  printf '  reachable    %s\n' "$(api /rest/system/version >/dev/null && echo yes || echo no)"
+  echo
+  cmd_status | jq .
+}
+
+case "${1:-status}" in
+status) cmd_status ;;
+rescan) cmd_rescan ;;
+open) cmd_open ;;
+logs) shift; cmd_logs "$@" ;;
+doctor) cmd_doctor ;;
+*) echo "usage: syncbar <status|rescan|open|logs|doctor>" >&2; exit 2 ;;
+esac
