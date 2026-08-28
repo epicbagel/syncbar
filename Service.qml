@@ -32,8 +32,14 @@ Item {
   property real globalBytes: 0
   property int percent: 100
   property int errors: 0
+  property real lastSeen: 0
+  property int graceHours: 24
 
   readonly property bool syncing: state === "syncing"
+  // "away" is a peer that is simply not on right now - a laptop, usually.
+  // "disconnected" is one that has not been seen for longer than the grace
+  // period, which is the case actually worth a red icon.
+  readonly property bool away: state === "away"
   readonly property bool disconnected: state === "disconnected"
   readonly property bool failed: state === "error" || state === "offline" || state === "nokey"
 
@@ -56,12 +62,22 @@ Item {
     return (v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)) + " " + u[i]
   }
 
+  function sinceSeen() {
+    if (!lastSeen) return ""
+    var s = Math.max(0, (Date.now() / 1000) - lastSeen)
+    if (s < 3600) return Math.floor(s / 60) + "m"
+    if (s < 86400) return Math.floor(s / 3600) + "h"
+    return Math.floor(s / 86400) + "d"
+  }
+
   function headline() {
     if (state === "nokey") return "No API key found"
     if (state === "offline") return running ? "Syncthing not answering" : "Syncthing is not running"
     if (state === "error") return errors + (errors === 1 ? " folder error" : " folder errors")
     if (state === "syncing") return "Syncing, " + humanBytes(needBytes) + " to go"
-    if (state === "disconnected") return "In sync, but no peer connected"
+    if (state === "away") return "In sync, peer offline" + (lastSeen > 0 ? " (seen " + sinceSeen() + " ago)" : "")
+    if (state === "disconnected") return lastSeen > 0
+      ? ("No peer seen for " + sinceSeen()) : "In sync, but no peer has ever connected"
     return "In sync"
   }
 
@@ -99,6 +115,8 @@ Item {
         root.globalBytes = Number(s.globalBytes) || 0
         root.percent = Number(s.percent)
         root.errors = Number(s.errors) || 0
+        root.lastSeen = Number(s.devices ? s.devices.lastSeen : 0) || 0
+        root.graceHours = Number(s.graceHours) || 24
       }
     }
   }

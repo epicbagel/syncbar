@@ -27,6 +27,7 @@ Panel {
     if (!sync) return Qt.darker(barForeground, 1.6)
     if (sync.failed) return root.urgent
     if (sync.disconnected && root.warnDisconnected) return root.urgent
+    if (sync.away) return Qt.darker(barForeground, 1.35)
     if (sync.syncing) return Color.accent
     return barForeground
   }
@@ -35,6 +36,7 @@ Panel {
     if (!sync) return ""
     if (sync.state === "nokey" || sync.state === "offline") return "off"
     if (sync.syncing) return sync.percent + "%"
+    if (sync.away) return "ok"
     if (sync.disconnected) return "0/" + sync.devicesTotal
     return "ok"
   }
@@ -160,10 +162,15 @@ Panel {
         Text {
           width: parent.width / 2
           horizontalAlignment: Text.AlignRight
-          text: root.sync ? (root.sync.devicesConnected + " of " + root.sync.devicesTotal) : ""
+          text: {
+            if (!root.sync) return ""
+            var base = root.sync.devicesConnected + " of " + root.sync.devicesTotal
+            var seen = root.sync.sinceSeen()
+            return root.sync.devicesConnected === 0 && seen !== "" ? base + "  ·  seen " + seen + " ago" : base
+          }
           // Zero peers is the quiet failure this widget exists to catch.
-          color: root.sync && root.sync.devicesTotal > 0 && root.sync.devicesConnected === 0
-                 ? root.urgent : root.foreground
+          // Red only once it has been gone longer than the grace period.
+          color: root.sync && root.sync.disconnected ? root.urgent : root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
         }
