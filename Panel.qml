@@ -32,13 +32,16 @@ Panel {
     return barForeground
   }
 
+  // Text only when there is something to say. Every other label on the bar is
+  // a value - 11m, 32.6G, 63C - so a widget that writes "ok" beside them is
+  // both noise and the odd one out. Healthy means the icon alone.
   readonly property string shortLabel: {
     if (!sync) return ""
     if (sync.state === "nokey" || sync.state === "offline") return "off"
     if (sync.syncing) return sync.percent + "%"
-    if (sync.away) return "ok"
-    if (sync.disconnected) return "0/" + sync.devicesTotal
-    return "ok"
+    if (sync.disconnected) return sync.sinceSeen() !== "" ? sync.sinceSeen() : "0/" + sync.devicesTotal
+    if (sync.errors > 0) return String(sync.errors)
+    return ""
   }
 
   visible: true
