@@ -17,7 +17,7 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   readonly property bool showLabel: setting("showLabel", true) === true
-  readonly property bool warnDisconnected: setting("warnDisconnected", true) === true
+  readonly property bool warnDisconnected: setting("warnDisconnected", false) === true
 
   // U+F0450, a circular arrow. One identity glyph with state carried by
   // colour, so the widget does not change shape as it works.
@@ -175,8 +175,10 @@ Panel {
             return root.sync.devicesConnected === 0 && seen !== "" ? base + "  ·  seen " + seen + " ago" : base
           }
           // Zero peers is the quiet failure this widget exists to catch.
-          // Red only once it has been gone longer than the grace period.
-          color: root.sync && root.sync.disconnected ? root.urgent : root.foreground
+          // Red only if the user has said an absent peer is a fault. Otherwise
+          // it is reported plainly, with how long it has been away.
+          color: root.sync && root.sync.disconnected && root.warnDisconnected
+                 ? root.urgent : root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
         }
