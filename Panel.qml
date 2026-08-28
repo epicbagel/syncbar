@@ -21,7 +21,9 @@ Panel {
 
   // U+F0450, a circular arrow. One identity glyph with state carried by
   // colour, so the widget does not change shape as it works.
-  readonly property string glyph: "󰑐"
+  // U+F04E6, the two-arrow sync loop. Above the BMP, so a surrogate pair
+  // rather than a single \u escape.
+  readonly property string glyph: "\uDB81\uDCE6"
 
   readonly property color stateColor: {
     if (!sync) return Qt.darker(barForeground, 1.6)
@@ -41,7 +43,8 @@ Panel {
     if (sync.syncing) return sync.percent + "%"
     if (sync.disconnected) return sync.sinceSeen() !== "" ? sync.sinceSeen() : "0/" + sync.devicesTotal
     if (sync.errors > 0) return String(sync.errors)
-    return ""
+    // Time since the last scan, the same shape as the backup widget's age.
+    return sync.sinceScan()
   }
 
   visible: true
