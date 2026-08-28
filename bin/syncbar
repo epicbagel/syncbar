@@ -67,11 +67,14 @@ gui_address() {
 API=$(gui_address)
 KEY=$(api_key || echo "")
 
-# -k because Syncthing's GUI certificate is self-signed by design. This only
-# ever talks to loopback, so there is no transport to protect from anyone.
+# The key goes in on stdin as a curl config, never as an argument: anything on
+# a command line is readable from /proc by any local process, and this is a
+# credential. -k because Syncthing's GUI certificate is self-signed by design,
+# and this only ever talks to loopback.
 api() {
   [[ -n $KEY ]] || return 1
-  curl -sk -m "$TIMEOUT" -H "X-API-Key: $KEY" "$API$1" 2>/dev/null
+  printf 'header = "X-API-Key: %s"\n' "$KEY" |
+    curl -sk -m "$TIMEOUT" -K - "$API$1" 2>/dev/null
 }
 
 unit_active() { systemctl --user is-active "$UNIT.service" >/dev/null 2>&1; }
@@ -138,9 +141,9 @@ cmd_status() {
 }
 
 cmd_rescan() {
-  api -X >/dev/null 2>&1 || true
   [[ -n $KEY ]] || die "no API key found in Syncthing's config"
-  curl -sk -m "$TIMEOUT" -X POST -H "X-API-Key: $KEY" "$API/rest/db/scan" >/dev/null 2>&1 &&
+  printf 'header = "X-API-Key: %s"\n' "$KEY" |
+    curl -sk -m "$TIMEOUT" -X POST -K - "$API/rest/db/scan" >/dev/null 2>&1 &&
     echo rescanning || die "rescan request failed"
 }
 
