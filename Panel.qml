@@ -55,7 +55,11 @@ Panel {
     id: button
     bar: root.bar
     anchors.centerIn: parent
-    text: root.showLabel && root.shortLabel !== "" ? root.glyph + "  " + root.shortLabel : root.glyph
+    // The neighbouring command modules set horizontalMargin 14; WidgetButton
+    // defaults to 8.5, which made these two sit tighter to their neighbours
+    // than everything else on the bar.
+    horizontalMargin: 14
+    text: root.showLabel && root.shortLabel !== "" ? root.glyph + " " + root.shortLabel : root.glyph
     tooltipText: root.sync ? root.sync.headline() : "Syncthing"
     foreground: root.stateColor
     onPressed: function (btn) {
